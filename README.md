@@ -27,7 +27,7 @@ I have opted for the latter for performance reasons. Laravel Octane allows you t
 
 A function URL is used to provide a dedicated HTTP(S) endpoint for the "HTTP" Lambda function. The function URL is then used as a CloudFront origin to handle most requests.
 
-However, the "HTTP" Lamdbda function cannot serve content like static assets. Your CSS, JavaScript, font and image files need to be stored in an "assets" S3 bucket. This bucket is used as another CloudFront origin.
+However, the "HTTP" Lambda function cannot serve content like static assets. Your CSS, JavaScript, font and image files need to be stored in an "assets" S3 bucket. This bucket is used as another CloudFront origin.
 
 ### Queued Jobs
 
