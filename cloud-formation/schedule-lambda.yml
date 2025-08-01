@@ -1,0 +1,95 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: Laravel Lambda Schedule Lambda Function
+
+Parameters:
+  LambdaSecurityGroupID:
+    Description: ID of the DB Lambda Security Group
+    Type: AWS::EC2::SecurityGroup::Id
+  Environment:
+    Description: Deployment environment
+    AllowedValues:
+      - test
+      - live
+    Type: String
+  LogRetention:
+    Default: 90
+    Description: Number of days to keep the logs
+    AllowedValues:
+      [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 182, 3653]
+    Type: Number
+  Memory:
+    Default: 1024
+    Description: Memory allocation
+    Type: Number
+  ScheduleState:
+    AllowedValues:
+      - ENABLED
+      - DISABLED
+    Default: ENABLED
+    Description: Enable or disable the scheduler
+    Type: String
+  RoleARN:
+    Description: ARN of the Lambda role
+    Type: String
+  Timeout:
+    Default: 10
+    Description: The maximum function execution time (in seconds)
+    Type: Number
+
+Resources:
+  Alias:
+    Type: AWS::Lambda::Alias
+    Properties:
+      Description: !Sub ${Environment} alias
+      FunctionName: !Ref Function
+      FunctionVersion: $LATEST
+      Name: !Ref Environment
+  Function:
+    Type: AWS::Lambda::Function
+    Properties:
+      Architectures:
+        - arm64
+      Code:
+        ImageUri: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/core-placeholder:latest
+      Description: Laravel Lambda Schedule Lambda Function
+      MemorySize: !Ref Memory
+      PackageType: Image
+      Role: !Ref RoleARN
+      Timeout: !Ref Timeout
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroupID
+        SubnetIds:
+          - !ImportValue core-network-PrivateSubnet1
+          - !ImportValue core-network-PrivateSubnet2
+          - !ImportValue core-network-PrivateSubnet3
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${Function}
+      RetentionInDays: !Ref LogRetention
+  Schedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: !Sub Invokes the ${Function} Lambda Function every minute
+      ScheduleExpression: rate(1 minute)
+      State: !Ref ScheduleState
+      Targets:
+        - Arn: !GetAtt Alias.AliasArn
+          Id: TargetLambda
+          Input: '"schedule:run"'
+  Permission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt Alias.AliasArn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt Schedule.Arn
+
+Outputs:
+  AliasARN:
+    Description: The alias
+    Export:
+      Name: !Sub ${AWS::StackName}-AliasARN
+    Value: !GetAtt Alias.AliasArn

@@ -1,0 +1,47 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: Membership DB Origin Request Lambda@Edge Function
+
+Parameters:
+  Memory:
+    Default: 128
+    Description: Memory allocation
+    Type: Number
+  Runtime:
+    Default: nodejs22.x
+    Description: The identifier of the function's runtime
+    Type: String
+  Timeout:
+    Default: 1
+    Description: The maximum function execution time (in seconds)
+    Type: Number
+
+Resources:
+  Function:
+    DependsOn:
+      - Role
+    Properties:
+      Code:
+        ZipFile: 'exports.handler = (event, context, callback) => { callback(null, event); };'
+      Description: Membership DB Origin Request Lambda@Edge Function
+      Handler: index.handler
+      MemorySize: !Ref Memory
+      Role: !GetAtt Role.Arn
+      Runtime: !Ref Runtime
+      Timeout: !Ref Timeout
+    Type: AWS::Lambda::Function
+  Role:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+                - edgelambda.amazonaws.com
+        Version: '2012-10-17'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+    Type: AWS::IAM::Role

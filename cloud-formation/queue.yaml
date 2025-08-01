@@ -1,0 +1,23 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: Laravel Lambda Queue
+
+Resources:
+  Queue:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: 345600
+      SqsManagedSseEnabled: true
+      VisibilityTimeout: 120
+
+Outputs:
+  QueueARN:
+    Description: The queue ARN
+    Export:
+      Name: !Sub ${AWS::StackName}-QueueARN
+    Value: !GetAtt Queue.Arn
+  QueueURL:
+    Description: The queue URL
+    Export:
+      Name: !Sub ${AWS::StackName}-QueueURL
+    Value: !Ref Queue

@@ -1,0 +1,137 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: Laravel Lambda S3 Buckets
+
+Parameters:
+  Environment:
+    Description: "Deployment environment"
+    Default: test
+    AllowedValues:
+      - test
+      - live
+    Type: String
+  CloudFrontDistributionId:
+    Description: ID of the CloudFront distribution
+    Default: unused
+    Type: String
+Conditions:
+  Live: !Equals
+    - !Ref Environment
+    - live
+  CloudFrontDistributionIdExists: !Not
+    - !Equals
+      - !Ref CloudFrontDistributionId
+      - unused
+
+Resources:
+  AssetsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      AccessControl: BucketOwnerFullControl
+      BucketName: !If
+        - Live
+        - laravel-lambda.danielhelen.com-assets
+        - !Sub ${Environment}.laravel-lambda.danielhelen.com-assets
+      LifecycleConfiguration:
+        Rules:
+          - NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+            Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+  AssetsBucketPolicy:
+    Condition: CloudFrontDistributionIdExists
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AssetsBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudFrontGetRequests
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub ${AssetsBucket.Arn}/*
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistributionId}
+  ConfigBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      AccessControl: BucketOwnerFullControl
+      BucketName: !If
+        - Live
+        - laravel-lambda.danielhelen.com-config
+        - !Sub ${Environment}.laravel-lambda.danielhelen.com-config
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+            Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+  InternalBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      AccessControl: BucketOwnerFullControl
+      BucketName: !If
+        - Live
+        - laravel-lambda.danielhelen.com-config
+        - !Sub ${Environment}.laravel-lambda.danielhelen.com-internal
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+            Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+Outputs:
+  ConfigBucketName:
+    Description: The config bucket name
+    Export:
+      Name: !Sub ${AWS::StackName}-ConfigBucketName
+    Value: !Ref ConfigBucket
+  ConfigBucketARN:
+    Description: The config bucket ARN
+    Export:
+      Name: !Sub ${AWS::StackName}-ConfigBucketARN
+    Value: !GetAtt ConfigBucket.Arn
+  AssetsBucketName:
+    Description: The assets bucket name
+    Export:
+      Name: !Sub ${AWS::StackName}-AssetsBucketName
+    Value: !Ref AssetsBucket
+  AssetsBucketARN:
+    Description: The assets bucket ARN
+    Export:
+      Name: !Sub ${AWS::StackName}-AssetsBucketARN
+    Value: !GetAtt AssetsBucket.Arn
+  AssetsBucketRegionalDomainName:
+    Description: The assets bucket regional domain name
+    Export:
+      Name: !Sub ${AWS::StackName}-AssetsBucketRegionalDomainName
+    Value: !GetAtt AssetsBucket.RegionalDomainName

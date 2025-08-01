@@ -1,0 +1,188 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: Laravel Lambda CloudFront Distribution
+
+Parameters:
+  AcmCertificateArn:
+    Description: The ARN of the ACM certificate
+    Type: String
+  BucketsStackName:
+    Description: Name of the buckets stack
+    Type: String
+  Environment:
+    Description: "Deployment environment"
+    Default: test
+    AllowedValues:
+      - test
+      - live
+    Type: String
+  CachingDisabledCachePolicyId:
+    Description: ID of the AWS managed cache policy that disables caching
+    Type: String
+    Default: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+  CachingOptimizedCachePolicyId:
+    Description: ID of the AWS managed cache policy that for optimized caching
+    Type: String
+    Default: 658327ea-f89d-4fab-a63d-7e88639e58f6
+  DomainName:
+    Description: Your domain name
+    Type: String
+  LambdaAliasARN:
+    Description: The URL of the HTTP Lambda function
+    Type: String
+  LambdaURL:
+    Description: The URL of the HTTP Lambda function (just the origin)
+    Type: String
+  OriginRequestLambdaVersionARN:
+    Description: The ARN of the origin request Lambda version
+    Type: String
+  WebACLARN:
+    Description: ARN of the WAF web ACL in the us-east-1 region
+    Type: String
+    Default: unused
+
+Conditions:
+  HasWebACL: !Not
+    - !Equals
+      - !Ref WebACLARN
+      - unused
+
+Resources:
+  LambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref LambdaAliasARN
+      FunctionUrlAuthType: AWS_IAM
+      Action: lambda:InvokeFunctionUrl
+      Principal: cloudfront.amazonaws.com
+      SourceArn: !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}
+  LambdaOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Description: !Sub ${DomainName} Lambda origin access control
+        Name: !Sub ${DomainName}-lambda
+        OriginAccessControlOriginType: lambda
+        SigningBehavior: always
+        SigningProtocol: sigv4
+  S3OriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Description: !Sub ${DomainName} S3 origin access control
+        Name: !Sub ${DomainName}-s3
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+  LambdaOriginRequestPolicy:
+    Type: AWS::CloudFront::OriginRequestPolicy
+    Properties:
+      OriginRequestPolicyConfig:
+        Name: !Sub ${Environment}-laravel-lambda-request-policy
+        CookiesConfig:
+          CookieBehavior: whitelist
+          Cookies:
+            - XSRF-TOKEN
+            - laravel_session
+        HeadersConfig:
+          HeaderBehavior: whitelist
+          Headers:
+            - Origin
+            - X-CSRF-TOKEN
+            - X-XSRF-TOKEN
+            - Accept
+            - Content-Type
+            - Stripe-Signature
+        QueryStringsConfig:
+          QueryStringBehavior: all
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Aliases:
+          - !Ref DomainName
+        CacheBehaviors:
+          - AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+            CachePolicyId: !Ref CachingOptimizedCachePolicyId
+            PathPattern: /build/*
+            TargetOriginId: Assets
+            ViewerProtocolPolicy: redirect-to-https
+          - AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+            CachePolicyId: !Ref CachingOptimizedCachePolicyId
+            PathPattern: /fonts/*
+            TargetOriginId: Assets
+            ViewerProtocolPolicy: redirect-to-https
+          - AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+            CachePolicyId: !Ref CachingOptimizedCachePolicyId
+            PathPattern: /favicon.ico
+            TargetOriginId: Assets
+            ViewerProtocolPolicy: redirect-to-https
+          - AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+            CachePolicyId: !Ref CachingOptimizedCachePolicyId
+            PathPattern: /robots.txt
+            TargetOriginId: Assets
+            ViewerProtocolPolicy: redirect-to-https
+          - AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+              - PUT
+              - PATCH
+              - POST
+              - DELETE
+            CachePolicyId: !Ref CachingDisabledCachePolicyId
+            OriginRequestPolicyId: !Ref LambdaOriginRequestPolicy
+            PathPattern: /api/*
+            TargetOriginId: Lambda
+            ViewerProtocolPolicy: redirect-to-https
+            LambdaFunctionAssociations:
+              - EventType: origin-request
+                IncludeBody: true
+                LambdaFunctionARN: !Ref OriginRequestLambdaVersionARN
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachePolicyId: !Ref CachingOptimizedCachePolicyId
+          OriginRequestPolicyId: !Ref LambdaOriginRequestPolicy
+          TargetOriginId: Lambda
+          ViewerProtocolPolicy: redirect-to-https
+        Comment: !Ref DomainName
+        Enabled: true
+        Origins:
+          - Id: Assets
+            DomainName: !ImportValue
+              Fn::Sub: ${BucketsStackName}-AssetsBucketRegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+            OriginAccessControlId: !GetAtt S3OriginAccessControl.Id
+          - Id: Lambda
+            DomainName: !Ref LambdaURL
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols:
+                - TLSv1.2
+            OriginAccessControlId: !GetAtt LambdaOriginAccessControl.Id
+        PriceClass: PriceClass_100
+        ViewerCertificate:
+          AcmCertificateArn: !Ref AcmCertificateArn
+          MinimumProtocolVersion: TLSv1.2_2019
+          SslSupportMethod: sni-only
+        HttpVersion: http2
+        WebACLId: !If
+          - HasWebACL
+          - !Ref WebACLARN
+          - !Ref AWS::NoValue

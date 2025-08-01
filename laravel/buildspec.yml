@@ -1,0 +1,78 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      php: 8.2
+
+    commands:
+      - echo Installing Composer...
+      - curl -s https://getcomposer.org/installer | php
+      - mv composer.phar /usr/local/bin/composer
+      - nohup /usr/local/bin/dockerd --host=unix:///var/run/docker.sock --host=tcp://0.0.0.0:2375 --storage-driver=overlay&
+      - timeout 15 sh -c "until docker info; do echo .; sleep 1; done"
+
+  build:
+    commands:
+      - cd laravel
+
+      # Build
+      - echo Deploying $APP_ENV
+      - aws s3 cp s3://$CONFIG_BUCKET/.env .env
+      - composer install --prefer-dist --optimize-autoloader --no-dev
+      - php artisan event:cache
+      - npm install && npm run build
+
+      # Package
+      - aws ecr get-login-password --region eu-west-1 | docker login --username AWS --password-stdin $IMAGE_REGISTRY
+      - |
+        docker pull $HTTP_IMAGE_REPOSITORY:latest || true &
+        docker pull $QUEUE_IMAGE_REPOSITORY:latest || true &
+        docker pull $SCHEDULE_IMAGE_REPOSITORY:latest || true &
+        wait
+      - |
+        docker build -f docker/http.Dockerfile --cache-from=$HTTP_IMAGE_REPOSITORY:latest -t $APP_ENV-membership-db-http . &
+        docker build -f docker/queue.Dockerfile --cache-from=$QUEUE_IMAGE_REPOSITORY:latest -t $APP_ENV-membership-db-queue . &
+        docker build -f docker/schedule.Dockerfile --cache-from=$SCHEDULE_IMAGE_REPOSITORY:latest -t $APP_ENV-membership-db-schedule . &
+        wait
+      - |
+        docker tag $APP_ENV-membership-db-http:latest $HTTP_IMAGE_REPOSITORY:latest &
+        docker tag $APP_ENV-membership-db-queue:latest $QUEUE_IMAGE_REPOSITORY:latest &
+        docker tag $APP_ENV-membership-db-schedule:latest $SCHEDULE_IMAGE_REPOSITORY:latest &
+        wait
+      - |
+        docker push $HTTP_IMAGE_REPOSITORY:latest &
+        docker push $QUEUE_IMAGE_REPOSITORY:latest &
+        docker push $SCHEDULE_IMAGE_REPOSITORY:latest &
+        wait
+
+      # Deploy
+      - |
+        aws lambda update-function-code --function-name $HTTP_FUNCTION_NAME --image-uri $HTTP_IMAGE_REPOSITORY:latest &
+        aws lambda update-function-code --function-name $QUEUE_FUNCTION_NAME --image-uri $QUEUE_IMAGE_REPOSITORY:latest &
+        aws lambda update-function-code --function-name $SCHEDULE_FUNCTION_NAME --image-uri $SCHEDULE_IMAGE_REPOSITORY:latest &
+        wait
+      - |
+        aws lambda wait function-updated --function-name $HTTP_FUNCTION_NAME &
+        aws lambda wait function-updated --function-name $QUEUE_FUNCTION_NAME &
+        aws lambda wait function-updated --function-name $SCHEDULE_FUNCTION_NAME &
+        wait
+      - HTTP_NEW_VERSION=$(aws lambda publish-version --function-name $HTTP_FUNCTION_NAME --query 'Version' --output text)
+      - QUEUE_NEW_VERSION=$(aws lambda publish-version --function-name $QUEUE_FUNCTION_NAME --query 'Version' --output text)
+      - SCHEDULE_NEW_VERSION=$(aws lambda publish-version --function-name $SCHEDULE_FUNCTION_NAME --query 'Version' --output text)
+
+      # Switchover
+      - |
+        php artisan migrate --force &
+        aws s3 sync public s3://$ASSETS_BUCKET \
+          --exclude "*" \
+          --include "build/*" \
+          --include "favicon.ico" \
+          --include "robots.txt" &
+        wait
+      - |
+        aws lambda update-alias --function-name $HTTP_FUNCTION_NAME --name $APP_ENV --function-version $HTTP_NEW_VERSION &
+        aws lambda update-alias --function-name $QUEUE_FUNCTION_NAME --name $APP_ENV --function-version $QUEUE_NEW_VERSION &
+        aws lambda update-alias --function-name $SCHEDULE_FUNCTION_NAME --name $APP_ENV --function-version $SCHEDULE_NEW_VERSION &
+        wait
+      - AWS_MAX_ATTEMPTS=10 aws cloudfront create-invalidation --distribution-id $CLOUDFRONT_DISTRIBUTION --paths "/*"

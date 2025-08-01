@@ -1,0 +1,87 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: Laravel Lambda Lambda Role
+
+Parameters:
+  DynamoDBTableARN:
+    Description: ARN of the DynamoDB table
+    Type: String
+  InternalBucketARN:
+    Description: ARN of the internal S3 bucket
+    Type: String
+  QueueARN:
+    Description: ARN of the queue
+    Type: String
+
+Resources:
+  Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+        Version: "2012-10-17"
+      Policies:
+        - PolicyName: FunctionPolicy
+          PolicyDocument:
+            Statement:
+              - Sid: CloudWatchPermissions
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+              - Sid: VPCPermissions
+                Effect: Allow
+                Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DescribeSubnets
+                  - ec2:DeleteNetworkInterface
+                  - ec2:AssignPrivateIpAddresses
+                  - ec2:UnassignPrivateIpAddresses
+                Resource: "*"
+              - Sid: DynamoDBPermissions
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DescribeTable
+                Resource: !Ref DynamoDBTableARN
+              - Sid: S3Permissions
+                Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:*Object
+                Resource:
+                  - !Ref InternalBucketARN
+                  - !Sub ${InternalBucketARN}/*
+              - Sid: SESPermissions
+                Effect: Allow
+                Action:
+                  - ses:SendEmail
+                  - ses:SendRawEmail
+                Resource: "*"
+              - Sid: SQSPermissions
+                Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource: !Ref QueueARN
+
+Outputs:
+  RoleARN:
+    Description: The role ARN
+    Export:
+      Name: !Sub ${AWS::StackName}-RoleARN
+    Value: !GetAtt Role.Arn

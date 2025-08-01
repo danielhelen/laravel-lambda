@@ -1,0 +1,6 @@
+{
+    "name": "danielhelen/placeholder",
+    "require": {
+        "bref/bref": "^2.4"
+    }
+}

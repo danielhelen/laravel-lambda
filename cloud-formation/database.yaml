@@ -1,0 +1,239 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: Deploys an Aurora Serverless v2 MySQL database cluster
+
+Conditions:
+  Restoring: !Not
+    - !Equals
+      - !Ref RestoreSnapshotARN
+      - unused
+
+Parameters:
+  BackupRetentionPeriod:
+    Description: Days to retain automated backups
+    Type: Number
+    MinValue: 1
+    MaxValue: 35
+    Default: 1
+  BastionImageId:
+    Description: The ID of the bastion server AMI
+    Default: ami-02cad064a29d4550c
+    Type: String
+  BastionInstanceType:
+    Description: The bastion server instance type
+    Default: t2.micro
+    Type: String
+  BastionKeyName:
+    Description: Name of the key pair for bastion server SSH access
+    Type: AWS::EC2::KeyPair::KeyName
+  DatabaseName:
+    Description: Name for database schema
+    Type: String
+    Default: laravel-lambda
+  DeletionProtection:
+    Description: Enable deletion protection
+    Type: String
+    AllowedValues:
+      - "true"
+      - "false"
+    Default: "false"
+  Environment:
+    Description: Deployment environment
+    Type: String
+    AllowedValues:
+      - test
+      - live
+  NetworkStackName:
+    Description: Stack name for the VPC network
+    Type: String
+    Default: core-network
+  ScalingMinCapacity:
+    Description: Minimum database capacity units to scale to (set to 0 to enable auto-pausing)
+    Type: Number
+    MinValue: 0
+    MaxValue: 128
+    Default: 0
+  ScalingMaxCapacity:
+    Description: Maximum database capacity units to scale to
+    Type: Number
+    MinValue: 1
+    MaxValue: 128
+    Default: 1
+  RestoreSnapshotARN:
+    Description: ARN of the Database Snapshot to restore from. Leave as 'unused' to make a new DB
+    Type: String
+    Default: unused
+
+Resources:
+  BastionServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Bastion Server Security Group
+      SecurityGroupIngress:
+        - Description: Public IPv6 SSH
+          IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIpv6: "::/0"
+      VpcId: !ImportValue core-network-VPC
+  CodeBuildSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Code Build Security Group
+      VpcId: !ImportValue core-network-VPC
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Lambda Security Group
+      VpcId: !ImportValue core-network-VPC
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Database Security Group
+      SecurityGroupIngress:
+        - Description: Bastion Server Access
+          FromPort: 3306
+          IpProtocol: tcp
+          SourceSecurityGroupId: !GetAtt BastionServerSecurityGroup.GroupId
+          ToPort: 3306
+        - Description: Code Build Access
+          FromPort: 3306
+          IpProtocol: tcp
+          SourceSecurityGroupId: !GetAtt CodeBuildSecurityGroup.GroupId
+          ToPort: 3306
+        - Description: Lambda Access
+          FromPort: 3306
+          IpProtocol: tcp
+          SourceSecurityGroupId: !GetAtt LambdaSecurityGroup.GroupId
+          ToPort: 3306
+      VpcId: !ImportValue core-network-VPC
+  Cluster:
+    Type: AWS::RDS::DBCluster
+    DependsOn: DBClusterCustomParameterGroup
+    Properties:
+      BackupRetentionPeriod: !Ref BackupRetentionPeriod
+      DBClusterIdentifier: !Sub ${Environment}-${DatabaseName}
+      DBClusterParameterGroupName: !Ref DBClusterCustomParameterGroup
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      DatabaseName: !Ref DatabaseName
+      DeletionProtection: !Ref DeletionProtection
+      EnableCloudwatchLogsExports:
+        - slowquery
+      Engine: aurora-mysql
+      EngineVersion: "8.0.mysql_aurora.3.08.0"
+      MasterUserPassword: !If
+        - Restoring
+        - !Ref AWS::NoValue
+        - !Sub "{{resolve:secretsmanager:${MasterCredentials}:SecretString:password}}"
+      MasterUsername: !If
+        - Restoring
+        - !Ref AWS::NoValue
+        - !Sub "{{resolve:secretsmanager:${MasterCredentials}:SecretString:username}}"
+      NetworkType: DUAL
+      ServerlessV2ScalingConfiguration:
+        MaxCapacity: !Ref ScalingMaxCapacity
+        MinCapacity: !Ref ScalingMinCapacity
+      SnapshotIdentifier: !If
+        - Restoring
+        - !Ref RestoreSnapshotARN
+        - !Ref AWS::NoValue
+      StorageEncrypted: !If
+        - Restoring
+        - !Ref AWS::NoValue
+        - "true"
+      VpcSecurityGroupIds:
+        - !Ref DatabaseSecurityGroup
+  InstanceWriter:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      Engine: aurora-mysql
+      DBInstanceClass: db.serverless
+      DBClusterIdentifier: !Ref Cluster
+  DBClusterCustomParameterGroup:
+    Type: AWS::RDS::DBClusterParameterGroup
+    Properties:
+      Description: Database Custom Parameters
+      Family: aurora-mysql8.0
+      Parameters:
+        aurora_parallel_query: 1
+        character_set_client: utf8mb4
+        character_set_connection: utf8mb4
+        character_set_database: utf8mb4
+        character_set_filesystem: utf8mb4
+        character_set_results: utf8mb4
+        character_set_server: utf8mb4
+        collation_connection: utf8mb4_unicode_ci
+        collation_server: utf8mb4_unicode_ci
+        sql_mode: STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION
+        slow_query_log: 1
+        long_query_time: 5
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub ${Environment}-${DatabaseName}-DBSubnetGroup
+      SubnetIds:
+        - !ImportValue
+          Fn::Sub: core-network-PrivateSubnet1
+        - !ImportValue
+          Fn::Sub: core-network-PrivateSubnet2
+        - !ImportValue
+          Fn::Sub: core-network-PrivateSubnet3
+  MasterCredentials:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Master Database User Credentials
+      GenerateSecretString:
+        ExcludeCharacters: '"`''#@/\'
+        GenerateStringKey: password
+        PasswordLength: 32
+        SecretStringTemplate: '{"username":"Master"}'
+      Name: !Sub ${Environment}-${DatabaseName}-database-user-Master
+  MasterCredentialsAttachment:
+    Type: AWS::SecretsManager::SecretTargetAttachment
+    Properties:
+      SecretId: !Ref MasterCredentials
+      TargetId: !Ref Cluster
+      TargetType: AWS::RDS::DBCluster
+  MasterCredentialsResourcePolicy:
+    Type: AWS::SecretsManager::ResourcePolicy
+    Properties:
+      ResourcePolicy:
+        Statement:
+          - Action: secretsmanager:DeleteSecret
+            Effect: Deny
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Resource: "*"
+        Version: "2012-10-17"
+      SecretId: !Ref MasterCredentials
+  BastionServer:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref BastionImageId
+      InstanceType: !Ref BastionInstanceType
+      KeyName: !Ref BastionKeyName
+      SecurityGroupIds:
+        - !Ref BastionServerSecurityGroup
+      SubnetId: !ImportValue
+        Fn::Sub: core-network-PublicSubnet1
+      UserData: !Base64
+        Fn::Join:
+          - ""
+          - - |
+              #!/bin/bash -xe
+            - |
+              echo "AllowAgentForwarding yes" | sudo tee -a /etc/ssh/sshd_config
+            - |
+              sudo service sshd restart
+
+Outputs:
+  Cluster:
+    Description: Aurora Cluster Name
+    Export:
+      Name: !Sub ${AWS::StackName}-Cluster
+    Value: !Ref Cluster
+  MasterCredentials:
+    Description: Secret containing master credentials
+    Export:
+      Name: !Sub ${AWS::StackName}-MasterCredentials
+    Value: !Ref MasterCredentials

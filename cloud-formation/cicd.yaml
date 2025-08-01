@@ -1,0 +1,378 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: Laravel Lambda CI/CD Pipeline
+
+Parameters:
+  BranchName:
+    Description: Name of the branch to watch
+    Type: String
+    Default: main
+  CodeBuildSecurityGroupId:
+    Description: ID of the Code Build security group
+    Type: AWS::EC2::SecurityGroup::Id
+  CodeStarConnectionArn:
+    Description: The connection ARN that is configured and authenticated for the source provider
+    Type: String
+  Environment:
+    Description: "Deployment environment: test or live"
+    AllowedValues:
+      - test
+      - live
+    Type: String
+  FullRepositoryId:
+    Description: The owner and name of the repository where source changes are to be detected
+    Type: String
+  AssetsBucket:
+    Description: Name of the config bucket
+    Type: String
+  ConfigBucket:
+    Description: Name of the config bucket
+    Type: String
+  CloudFrontDistributionId:
+    Description: ID of the CloudFront distribution
+    Type: String
+  HTTPFunctionName:
+    Description: Name of the HTTP function
+    Type: String
+  QueueFunctionName:
+    Description: Name of the queue function
+    Type: String
+  ScheduleFunctionName:
+    Description: Name of the schedule function
+    Type: String
+
+Resources:
+  HTTPImageRepository:
+    DeletionPolicy: Retain
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub ${Environment}-laravel-lambda-http
+      RepositoryPolicyText:
+        Version: "2008-10-17"
+        Statement:
+          - Sid: AllowLambdaPull
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action:
+              - ecr:BatchGetImage
+              - ecr:GetDownloadUrlForLayer
+              - ecr:SetRepositoryPolicy
+              - ecr:DeleteRepositoryPolicy
+              - ecr:GetRepositoryPolicy
+            Condition:
+              StringLike:
+                aws:sourceArn: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:*
+  QueueImageRepository:
+    DeletionPolicy: Retain
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub ${Environment}-laravel-lambda-queue
+      RepositoryPolicyText:
+        Version: "2008-10-17"
+        Statement:
+          - Sid: AllowLambdaPull
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action:
+              - ecr:BatchGetImage
+              - ecr:GetDownloadUrlForLayer
+              - ecr:SetRepositoryPolicy
+              - ecr:DeleteRepositoryPolicy
+              - ecr:GetRepositoryPolicy
+            Condition:
+              StringLike:
+                aws:sourceArn: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:*
+  ScheduleImageRepository:
+    DeletionPolicy: Retain
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub ${Environment}-laravel-lambda-schedule
+      RepositoryPolicyText:
+        Version: "2008-10-17"
+        Statement:
+          - Sid: AllowLambdaPull
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action:
+              - ecr:BatchGetImage
+              - ecr:GetDownloadUrlForLayer
+              - ecr:SetRepositoryPolicy
+              - ecr:DeleteRepositoryPolicy
+              - ecr:GetRepositoryPolicy
+            Condition:
+              StringLike:
+                aws:sourceArn: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:*
+  ArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      AccessControl: BucketOwnerFullControl
+      BucketName: !Sub ${Environment}-laravel-lambda-cicd-artifacts
+      LifecycleConfiguration:
+        Rules:
+          - ExpirationInDays: 30
+            Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: !Sub ${Environment}-laravel-lambda-cicd-code-build
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource: !GetAtt ArtifactsBucket.Arn
+              - Effect: Allow
+                Action: s3:*Object
+                Resource:
+                  - !Join
+                    - ""
+                    - - !GetAtt ArtifactsBucket.Arn
+                      - /*
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:GetObject
+                Resource:
+                  - !Sub arn:aws:s3:::${ConfigBucket}
+                  - !Sub arn:aws:s3:::${ConfigBucket}/*
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                  - s3:PutObject
+                  - s3:PutObjectAcl
+                  - s3:DeleteObject
+                  - s3:GetObject
+                Resource:
+                  - !Sub arn:aws:s3:::${AssetsBucket}
+                  - !Sub arn:aws:s3:::${AssetsBucket}/*
+              - Effect: Allow
+                Action:
+                  - lambda:UpdateFunctionCode
+                  - lambda:PublishVersion
+                  - lambda:UpdateAlias
+                  - lambda:GetFunction
+                  - lambda:GetFunctionConfiguration
+                Resource:
+                  - !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${HTTPFunctionName}*
+                  - !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${QueueFunctionName}*
+                  - !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${ScheduleFunctionName}*
+              - Effect: Allow
+                Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:DescribeDhcpOptions
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DeleteNetworkInterface
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeVpcs
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ec2:CreateNetworkInterfacePermission
+                Resource: !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:network-interface/*
+                Condition:
+                  StringEquals:
+                    ec2:AuthorizedService: codebuild.amazonaws.com
+                  ArnEquals:
+                    ec2:Subnet:
+                      - !Sub
+                        - "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:subnet/${SubnetId}"
+                        - SubnetId: !ImportValue core-network-PrivateSubnet1
+                      - !Sub
+                        - "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:subnet/${SubnetId}"
+                        - SubnetId: !ImportValue core-network-PrivateSubnet2
+                      - !Sub
+                        - "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:subnet/${SubnetId}"
+                        - SubnetId: !ImportValue core-network-PrivateSubnet3
+              - Effect: Allow
+                Action: cloudfront:CreateInvalidation
+                Resource: !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistributionId}
+              - Effect: Allow
+                Action:
+                  - ecr:CompleteLayerUpload
+                  - ecr:GetAuthorizationToken
+                  - ecr:UploadLayerPart
+                  - ecr:InitiateLayerUpload
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:PutImage
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                Resource:
+                  - !GetAtt HTTPImageRepository.Arn
+                  - !GetAtt QueueImageRepository.Arn
+                  - !GetAtt ScheduleImageRepository.Arn
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:DescribeDhcpOptions
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DeleteNetworkInterface
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeVpcs
+                Resource: "*"
+              - Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - ssm:GetParameters
+                Effect: Allow
+                Resource: "*"
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub ${Environment}-laravel-lambda
+      Description: Builds and deploys the Laravel Lambda
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: ARM_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-aarch64-standard:3.0
+        EnvironmentVariables:
+          - Name: APP_ENV
+            Type: PLAINTEXT
+            Value: !Ref Environment
+          - Name: ASSETS_BUCKET
+            Type: PLAINTEXT
+            Value: !Ref AssetsBucket
+          - Name: CONFIG_BUCKET
+            Type: PLAINTEXT
+            Value: !Ref ConfigBucket
+          - Name: HTTP_FUNCTION_NAME
+            Type: PLAINTEXT
+            Value: !Ref HTTPFunctionName
+          - Name: QUEUE_FUNCTION_NAME
+            Type: PLAINTEXT
+            Value: !Ref QueueFunctionName
+          - Name: SCHEDULE_FUNCTION_NAME
+            Type: PLAINTEXT
+            Value: !Ref ScheduleFunctionName
+          - Name: CLOUDFRONT_DISTRIBUTION
+            Type: PLAINTEXT
+            Value: !Ref CloudFrontDistributionId
+          - Name: IMAGE_REGISTRY
+            Type: PLAINTEXT
+            Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com
+          - Name: HTTP_IMAGE_REPOSITORY
+            Type: PLAINTEXT
+            Value: !GetAtt HTTPImageRepository.RepositoryUri
+          - Name: QUEUE_IMAGE_REPOSITORY
+            Type: PLAINTEXT
+            Value: !GetAtt QueueImageRepository.RepositoryUri
+          - Name: SCHEDULE_IMAGE_REPOSITORY
+            Type: PLAINTEXT
+            Value: !GetAtt ScheduleImageRepository.RepositoryUri
+        PrivilegedMode: true
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: laravel/buildspec.yml
+        GitCloneDepth: 1
+      TimeoutInMinutes: 10
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref CodeBuildSecurityGroupId
+        Subnets:
+          - !ImportValue core-network-PrivateSubnet1
+          - !ImportValue core-network-PrivateSubnet2
+          - !ImportValue core-network-PrivateSubnet3
+        VpcId: !ImportValue core-network-VPC
+
+  CodePipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: !Sub ${Environment}-laravel-lambda
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - codestar-connections:UseConnection
+                Resource: !Ref CodeStarConnectionArn
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource: !GetAtt ArtifactsBucket.Arn
+              - Effect: Allow
+                Action: s3:*Object
+                Resource:
+                  - !Sub ${ArtifactsBucket.Arn}/*
+              - Effect: Allow
+                Action:
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                Resource: !GetAtt CodeBuildProject.Arn
+  CodePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      ArtifactStore:
+        Location: !Ref ArtifactsBucket
+        Type: S3
+      Name: !Sub ${Environment}-laravel-lambda-cicd-pipeline
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              Namespace: SourceVariables
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: 1
+              OutputArtifacts:
+                - Name: SourceOutput
+              Configuration:
+                ConnectionArn: !Ref CodeStarConnectionArn
+                FullRepositoryId: !Ref FullRepositoryId
+                BranchName: !Ref BranchName
+              RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: BuildAction
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: 1
+              InputArtifacts:
+                - Name: SourceOutput
+              Configuration:
+                ProjectName: !Ref CodeBuildProject
+                EnvironmentVariables: '[{"name":"COMMIT_ID","value":"#{SourceVariables.CommitId}","type":"PLAINTEXT"}]'
+              RunOrder: 1
