@@ -4,7 +4,6 @@ Description: Core Elastic Container Registries
 
 Resources:
   PlaceholderRepository:
-    DeletionPolicy: Retain
     Type: AWS::ECR::Repository
     Properties:
       RepositoryName: core-placeholder

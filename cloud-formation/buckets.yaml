@@ -3,21 +3,14 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: Laravel Lambda S3 Buckets
 
 Parameters:
-  Environment:
-    Description: "Deployment environment"
-    Default: test
-    AllowedValues:
-      - test
-      - live
+  DomainName:
+    Description: The domain name
     Type: String
   CloudFrontDistributionId:
     Description: ID of the CloudFront distribution
     Default: unused
     Type: String
 Conditions:
-  Live: !Equals
-    - !Ref Environment
-    - live
   CloudFrontDistributionIdExists: !Not
     - !Equals
       - !Ref CloudFrontDistributionId
@@ -28,10 +21,7 @@ Resources:
     Type: AWS::S3::Bucket
     Properties:
       AccessControl: BucketOwnerFullControl
-      BucketName: !If
-        - Live
-        - laravel-lambda.danielhelen.com-assets
-        - !Sub ${Environment}.laravel-lambda.danielhelen.com-assets
+      BucketName: !Sub ${DomainName}-assets
       LifecycleConfiguration:
         Rules:
           - NoncurrentVersionExpiration:
@@ -61,14 +51,25 @@ Resources:
             Condition:
               StringEquals:
                 AWS:SourceArn: !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistributionId}
+  CICDArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      AccessControl: BucketOwnerFullControl
+      BucketName: !Sub ${DomainName}-cicd-artifacts
+      LifecycleConfiguration:
+        Rules:
+          - ExpirationInDays: 30
+            Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
   ConfigBucket:
     Type: AWS::S3::Bucket
     Properties:
       AccessControl: BucketOwnerFullControl
-      BucketName: !If
-        - Live
-        - laravel-lambda.danielhelen.com-config
-        - !Sub ${Environment}.laravel-lambda.danielhelen.com-config
+      BucketName: !Sub ${DomainName}-config
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
@@ -89,10 +90,7 @@ Resources:
     Type: AWS::S3::Bucket
     Properties:
       AccessControl: BucketOwnerFullControl
-      BucketName: !If
-        - Live
-        - laravel-lambda.danielhelen.com-config
-        - !Sub ${Environment}.laravel-lambda.danielhelen.com-internal
+      BucketName: !Sub ${DomainName}-internal
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
@@ -109,17 +107,8 @@ Resources:
         RestrictPublicBuckets: true
       VersioningConfiguration:
         Status: Enabled
+
 Outputs:
-  ConfigBucketName:
-    Description: The config bucket name
-    Export:
-      Name: !Sub ${AWS::StackName}-ConfigBucketName
-    Value: !Ref ConfigBucket
-  ConfigBucketARN:
-    Description: The config bucket ARN
-    Export:
-      Name: !Sub ${AWS::StackName}-ConfigBucketARN
-    Value: !GetAtt ConfigBucket.Arn
   AssetsBucketName:
     Description: The assets bucket name
     Export:
@@ -135,3 +124,33 @@ Outputs:
     Export:
       Name: !Sub ${AWS::StackName}-AssetsBucketRegionalDomainName
     Value: !GetAtt AssetsBucket.RegionalDomainName
+  CICDArtifactsBucketName:
+    Description: The CI/CD artifacts bucket name
+    Export:
+      Name: !Sub ${AWS::StackName}-CICDArtifactsBucketName
+    Value: !Ref CICDArtifactsBucket
+  CICDArtifactsBucketARN:
+    Description: The CI/CD artifacts bucket ARN
+    Export:
+      Name: !Sub ${AWS::StackName}-CICDArtifactsBucketARN
+    Value: !GetAtt CICDArtifactsBucket.Arn
+  ConfigBucketName:
+    Description: The config bucket name
+    Export:
+      Name: !Sub ${AWS::StackName}-ConfigBucketName
+    Value: !Ref ConfigBucket
+  ConfigBucketARN:
+    Description: The config bucket ARN
+    Export:
+      Name: !Sub ${AWS::StackName}-ConfigBucketARN
+    Value: !GetAtt ConfigBucket.Arn
+  InternalBucketName:
+    Description: The internal bucket name
+    Export:
+      Name: !Sub ${AWS::StackName}-InternalBucketName
+    Value: !Ref InternalBucket
+  InternalBucketARN:
+    Description: The internal bucket ARN
+    Export:
+      Name: !Sub ${AWS::StackName}-InternalBucketARN
+    Value: !GetAtt InternalBucket.Arn
