@@ -48,7 +48,15 @@ Conditions:
       - unused
 
 Resources:
-  LambdaPermission:
+  LambdaInvokeFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref LambdaAliasARN
+      InvokedViaFunctionUrl: true
+      Action: lambda:InvokeFunction
+      Principal: cloudfront.amazonaws.com
+      SourceArn: !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}
+  LambdaInvokeFunctionURLPermission:
     Type: AWS::Lambda::Permission
     Properties:
       FunctionName: !Ref LambdaAliasARN
